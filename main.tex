@@ -10,7 +10,7 @@
 % \maketitle
 
 % \begin{abstract}
-% 	摘要。
+% 	摘要. 
 % 	\\\\
 % 	\textbf{关键词：}关键词1；关键词2
 % \end{abstract}
@@ -18,6 +18,27 @@
 \section{DDPM 的理论与实践}
 \subsection{DDPM 的工作流}
 
+DDPM 是经典的高斯过程，虽然前向过程中的加噪可以\textbf{被巧妙地设计为一次计算就加到第 \(t\) 步}，但是反向过程中务必要逐步（step）地从后向前去噪. 每次去噪步 \(t\) 上都是已知带噪数据 \(x_t\) 求该步去噪后得到的噪声更少的数据  \(x_{t-1}\). 
+
+但是，要厘清一个理解上的误区，即认为“去噪过程是每步预测当前步的噪声\(\epsilon_t\)”. 这其实是不可能的，因为前向过程既然已经“被巧妙地设计为一次计算就加到第 \(t\) 步”，那么这之前的\(\{1, ..., t-1\}\)步中任何一步的噪声在构造训练数据过程中都是没有的，也就无从去预测. 事实上，我们预测的只能是加噪时“一次计算就加到第 \(t\) 步的噪声\(\epsilon_{1:t}\)”. 
+
+但是这里一个令人困惑的问题就来了，既然这样，为什么我们不直接从噪声中去掉它来得到干净的数据呢？为什么还要“舍近求远”地去把这个预测的累积 \(t\) 步的噪声 \(\epsilon_{1:t}\) 和当前数据 \(x_t\) 步之间做差值来得到仅仅向前去噪一步（相当于去掉 \(\epsilon_{t}\) ）的结果？
+
+事实上，你完全可以！DDIM 和 Flow Matching 就是这么做的（用少步甚至 1 步生成）。但目前我们讨论的是 DDPM，它选择逐步去噪的策略可以被归为历史的局限。而由 DDPM 到 DDIM 再到 Flow Matching 的演变其实恰恰反映了扩散模型发展过程中认识由浅入深的过程：
+
+(a) 历史原因：DDPM 基于变分推断框架
+它假设反向过程是一个马尔可夫链，每步都是高斯分布；
+为了最大化证据下界（ELBO），需要逐步建模 \(q(x_{t-1},x_t)\)；
+所以即使能一步到位，训练目标仍被设计为逐步去噪。
+(b) 稳定性考虑（早期认知）
+在 DDPM 提出时（2020），人们认为多步去噪更稳定；
+一步去噪对模型误差敏感（若 \(\epsilon_\theta\) 有偏差， \(x_0\) 会严重失真）；
+逐步去噪可“逐步修正”误差。
+但后来 DDIM（2020）和 Flow Matching（2023）证明：只要采样策略得当，少步甚至 1 步也可以高质量生成。
+
+
+
+% 模型预测初始噪声\(\epsilon\)，
 
 
 \subsection{关键环节：如何实现从 \(t\) 到 \(t-1\) 的飞跃？}
@@ -75,7 +96,7 @@ q(x_t \mid x_{t-1}) = \mathcal{N}(x_t; \sqrt{\alpha_t} x_{t-1},\ \beta_t I)
 \tag{C}
 \]
 
-我们想求 \( q(x_{t-1} \mid x_t, x_0) \)。由于前向过程是马尔可夫的，且所有关系都是高斯的，这个后验也是高斯的。
+我们想求 \( q(x_{t-1} \mid x_t, x_0) \). 由于前向过程是马尔可夫的，且所有关系都是高斯的，这个后验也是高斯的. 
 
 回顾贝叶斯规则：
 \begin{tcolorbox}
@@ -89,7 +110,7 @@ p(x \mid y) = \frac{p(xy)}{p(y)} = \frac{p(y \mid x) \cdot p(x)}{p(y)}
 q(x_{t-1} \mid x_t, x_0) = \frac{q(x_t|x_{t-1},x_0)\cdot q(x_{t-1}|x_0)}{q(x_t|x_0)}
 \]
 
-由于 \(x_t\)  和 \(x_0\)是已知的观测值或条件，而我们要求的是关于 \(x_{t-1}\) 的分布，分母 \(q(x_t|x_0)\) 对于变量 \(x_{t-1}\)   来说就是一个常数。故将其约去，进一步有：
+由于 \(x_t\)  和 \(x_0\)是已知的观测值或条件，而我们要求的是关于 \(x_{t-1}\) 的分布，分母 \(q(x_t|x_0)\) 对于变量 \(x_{t-1}\)   来说就是一个常数. 故将其约去，进一步有：
 \[
 q(x_{t-1} \mid x_t, x_0)  \propto q(x_t \mid x_{t-1}, x_0) \cdot q(x_{t-1} \mid x_0)
 \]
@@ -159,13 +180,50 @@ q(x_{t-1} \mid x_t, x_0)  \propto q(x_t \mid x_{t-1}) \cdot q(x_{t-1} \mid x_0)
 \tilde{\mu}(x_t, x_0) = \frac{ \sqrt{\bar{\alpha}_{t-1}} \beta_t }{1 - \bar{\alpha}_t } x_0 + \frac{ \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1}) }{1 - \bar{\alpha}_t } x_t
 \]
 
-
 \end{proof}
 
 
 
 
 \subsection{回到实践中：从代码运行逻辑的视角看 DDPM 到底发生了什么}
+
+模型预测的是 \(\epsilon\)，但这并不意味着去噪过程直接“减去 \(\epsilon\)”。实际上，去噪的每一步都由调度器（scheduler），而神经网络仅负责提供对原始噪声的估计。整个生成流程可分解为以下三个阶段：
+
+1. 噪声预测（模型部分）  
+   给定当前带噪样本 \(x_t\) 和时间步 \(t\)，神经网络输出：
+   \[
+   \epsilon_\theta = \texttt{model}(x_t, t)
+   \]
+   这是唯一由可学习参数参与的步骤。
+
+2. 干净图像重建（确定性计算）  
+   利用预测的 \(\epsilon_\theta\)，通过重参数化公式反推对原始数据的估计：
+   \[
+   \hat{x}_0 = \frac{x_t - \sqrt{1 - \bar{\alpha}_t} \cdot \epsilon_\theta}{\sqrt{\bar{\alpha}_t}}
+   \]
+   此步骤完全由预设的噪声调度 \(\{\bar{\alpha}_t\}\) 决定，无需学习。
+
+3. 下一步状态计算（调度器核心）  
+   将 \(\hat{x}_0\) 代入理论均值公式~\eqref{mu}，得到去噪后的均值：
+   \[
+   \mu_\theta = \tilde{\mu}(x_t, \hat{x}_0) = \frac{ \sqrt{\bar{\alpha}_{t-1}} \beta_t }{1 - \bar{\alpha}_t } \hat{x}_0 + \frac{ \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1}) }{1 - \bar{\alpha}_t } x_t
+   \]
+   在 DDPM 中，最终的 \(x_{t-1}\) 为：
+   \[
+   x_{t-1} = \mu_\theta + \sigma_t \cdot z,\quad z \sim \mathcal{N}(0, I)
+   \]
+   其中方差 \(\sigma_t\) 由调度器设定（如 \(\sigma_t = \beta_t\) 或 \(\tilde{\beta}_t\)），而随机项 \(z\) 引入探索性噪声，使采样过程保持随机性。
+
+\begin{tcolorbox}
+    关键分工：  \\
+    模型（Model）：仅预测 \(\epsilon\)；  \\
+    调度器（Scheduler）：负责所有与时间步相关的计算（\(\bar{\alpha}_t, \beta_t\)）、\(\hat{x}_0\) 重建、\(\mu_\theta\) 计算、以及是否添加随机噪声。  
+\end{tcolorbox}
+
+
+这种解耦设计使得同一模型可配合不同调度策略（如 DDPM、DDIM、DPM-Solver）使用，极大提升了灵活性。例如，在 DDIM 中，调度器仅需将 \(\sigma_t\) 设为 0，即可实现确定性跳步采样，而模型本身无需任何修改。
+
+因此，DDPM 的“逐步去噪”并非源于模型能力的限制，而是其默认调度策略的选择。一旦更换调度器，同一模型即可实现快速、确定性生成——这正是从 DDPM 到 DDIM 再到 Flow Matching 的演进所揭示的深层洞见：生成过程的效率瓶颈不在模型，而在采样策略。
 
 
 
@@ -193,6 +251,107 @@ q(x_{t-1} \mid x_t, x_0)  \propto q(x_t \mid x_{t-1}) \cdot q(x_{t-1} \mid x_0)
 
 这是多元高斯分布（Multivariate Gaussian）的一个经典结果，我们先在二元的情形下考察它：
 
+\begin{proof}
+    
+步骤 1：写出联合概率密度函数
+
+联合高斯密度为：
+\[
+p(y, x) = \frac{1}{(2\pi)^{(n+m)/2} |\Sigma|^{1/2}} \exp\left( -\frac{1}{2} \begin{bmatrix} y - \mu_y \\ x - \mu_x \end{bmatrix}^\top \Sigma^{-1} \begin{bmatrix} y - \mu_y \\ x - \mu_x \end{bmatrix} \right)
+\]
+
+其中 \(\Sigma = \begin{bmatrix} \Sigma_{yy} & \Sigma_{yx} \\ \Sigma_{xy} & \Sigma_{xx} \end{bmatrix}\)，且 \(\Sigma_{xy} = \Sigma_{yx}^\top\)（协方差矩阵对称）. 
+
+
+步骤 2：将二次型展开（配方法）
+
+令：
+\[
+\Delta_y = y - \mu_y,\quad \Delta_x = x - \mu_x
+\]
+
+则指数部分为：
+\[
+Q = \begin{bmatrix} \Delta_y \\ \Delta_x \end{bmatrix}^\top \Sigma^{-1} \begin{bmatrix} \Delta_y \\ \Delta_x \end{bmatrix}
+\]
+
+我们不直接求 \(\Sigma^{-1}\)，而是用\textbf{矩阵分块求逆}或\textbf{配方法}（completing the square）. 
+
+\begin{tcolorbox}
+关键思想：把 \(Q\) 写成关于 \(\Delta_y\) 的二次函数：
+\[
+Q = (\Delta_y - A \Delta_x)^\top M (\Delta_y - A \Delta_x) + \text{terms only in } \Delta_x
+\]
+这样，条件分布 \(p(y \mid x)\) 的均值就是 \(\mu_y + A \Delta_x\).
+
+\end{tcolorbox}
+
+步骤 3：使用矩阵恒等式（标准推导）
+
+已知协方差矩阵的分块形式，其逆矩阵可表示为（利用 Schur complement）：
+
+\[
+\Sigma^{-1} = 
+\begin{bmatrix}
+\Sigma_{yy}^{-1} + \Sigma_{yy}^{-1} \Sigma_{yx} S^{-1} \Sigma_{xy} \Sigma_{yy}^{-1} & -\Sigma_{yy}^{-1} \Sigma_{yx} S^{-1} \\
+- S^{-1} \Sigma_{xy} \Sigma_{yy}^{-1} & S^{-1}
+\end{bmatrix}
+\]
+其中 \(S = \Sigma_{xx} - \Sigma_{xy} \Sigma_{yy}^{-1} \Sigma_{yx}\) 是 Schur complement. 
+
+但更简单的方式是直接假设条件均值为线性形式（高斯分布的性质保证它是线性的）：
+
+设：
+\[
+\mathbb{E}[y \mid x] = \mu_y + K (x - \mu_x)
+\]
+我们的目标是求矩阵 \(K\). 
+
+
+经典推导：利用协方差定义
+
+考虑误差 \(e = y - \mathbb{E}[y \mid x] = y - \mu_y - K(x - \mu_x)\)
+
+在最优线性估计（即 MMSE 估计）下，\textbf{误差 \(e\) 与观测 \(x\) 不相关}：
+\[
+\text{Cov}(e, x) = 0
+\]
+
+计算：
+\[
+\text{Cov}(e, x) = \text{Cov}(y - \mu_y - K(x - \mu_x),\ x - \mu_x)
+= \text{Cov}(y, x) - K \text{Cov}(x, x)
+= \Sigma_{yx} - K \Sigma_{xx}
+\]
+
+令其为零：
+\[
+\Sigma_{yx} - K \Sigma_{xx} = 0 \quad \Rightarrow \quad K = \Sigma_{yx} \Sigma_{xx}^{-1}
+\]
+
+因此：
+\[
+\boxed{ \mathbb{E}[y \mid x] = \mu_y + \Sigma_{yx} \Sigma_{xx}^{-1} (x - \mu_x) }
+\]
+
+\end{proof}
+
+\begin{tcolorbox}
+式中：
+
+\(\Sigma_{yx}\)：\(y\) 和 \(x\) 的协方差（“它们如何一起变化”）\\
+\(\Sigma_{xx}^{-1}\)：对 \(x\) 的“归一化”（考虑 \(x\) 自身的变化尺度）\\
+\(x - \mu_x\)：当前 \(x\) 偏离均值的程度\\
+整体：根据 \(x\) 的偏差，按协方差比例调整 \(y\) 的预测
+
+这类似于线性回归：  
+\[
+\hat{y} = \mu_y + \underbrace{(\text{Cov}(y,x) \text{Var}(x)^{-1})}_{\text{回归系数}} (x - \mu_x)
+\]
+
+在多元情况下，协方差和方差推广为矩阵. 
+
+\end{tcolorbox}
 
 \printbibliography%[heading=bibliography,title=参考文献]
 \end{document}
