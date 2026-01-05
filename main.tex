@@ -1,0 +1,198 @@
+\input{Style/style}
+
+\begin{document}
+
+
+% \title{标题设置见Style/style.tex中的标题样式}
+% \author{}
+
+% \input{Content/titlepage.tex} % 这个是封面，不需要刻意注释掉
+% \maketitle
+
+% \begin{abstract}
+% 	摘要。
+% 	\\\\
+% 	\textbf{关键词：}关键词1；关键词2
+% \end{abstract}
+
+\section{DDPM 的理论与实践}
+\subsection{DDPM 的工作流}
+
+
+
+\subsection{关键环节：如何实现从 \(t\) 到 \(t-1\) 的飞跃？}
+
+DDPM 假设前向过程是固定的马尔可夫链：
+\[
+q(x_t | x_{t-1}) = \mathcal{N}(x_t; \sqrt{\alpha_t} x_{t-1}, \beta_t I)
+\]
+其中 \(\alpha_t = 1 - \beta_t\)，\(\bar{\alpha}_t = \prod_{s=1}^t \alpha_s\).
+
+
+通过贝叶斯规则和高斯条件分布的性质，可以得到：
+\[
+q(x_{t-1} | x_t, x_0) = \mathcal{N}(x_{t-1}; \tilde{\mu}(x_t, x_0), \tilde{\beta}_t I)
+\]
+
+其中\textbf{真实均值}为：
+\begin{equation}
+\tilde{\mu}(x_t, x_0) = \frac{\sqrt{\bar{\alpha}_{t-1}} \beta_t}{1 - \bar{\alpha}_t} x_0 + \frac{\sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1})}{1 - \bar{\alpha}_t} x_t
+\label{mu}
+\end{equation}
+
+注意，这个均值仅为 \(x_0\) 与 \(x_t\) 的函数，其中 \(x_t\) 就是当前的带噪图像. 故问题仅是对 \(x_0\) 做估计，并用估计值来替代公式中的实际值. 此部分不在本节赘述. 
+
+以下详细展示式~\eqref{mu}的推导过程：
+
+
+\begin{proof}
+
+已知：(1)~前向过程是高斯马尔可夫链；(2)~\(x_t\) 和 \(x_{t-1}\) 都与 \(x_0\) 有线性高斯关系；
+求：后验分布 \( q(x_{t-1} \mid x_t, x_0) \) 的均值 \(\tilde{\mu}(x_t, x_0)\).
+
+从 DDPM 的前向定义出发，写出三个基本的前向过程：
+
+(a) \(x_t\) 给定 \(x_0\)：
+\[
+x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon_t,\quad \epsilon_t \sim \mathcal{N}(0, I)
+\]
+
+\(\Rightarrow\)
+\[
+q(x_t \mid x_0) = \mathcal{N}(x_t; \sqrt{\bar{\alpha}_t} x_0,\ (1 - \bar{\alpha}_t) I)
+\tag{A}
+\]
+
+(b) \(x_{t-1}\) 给定 \(x_0\)：
+\[
+q(x_{t-1} \mid x_0) = \mathcal{N}(x_{t-1}; \sqrt{\bar{\alpha}_{t-1}} x_0,\ (1 - \bar{\alpha}_{t-1}) I)
+\tag{B}
+\]
+
+(c) \(x_t\) 给定 \(x_{t-1}\)（马尔可夫性）：
+\[
+q(x_t \mid x_{t-1}) = \mathcal{N}(x_t; \sqrt{\alpha_t} x_{t-1},\ \beta_t I)
+\tag{C}
+\]
+
+我们想求 \( q(x_{t-1} \mid x_t, x_0) \)。由于前向过程是马尔可夫的，且所有关系都是高斯的，这个后验也是高斯的。
+
+回顾贝叶斯规则：
+\begin{tcolorbox}
+\[
+p(x \mid y) = \frac{p(xy)}{p(y)} = \frac{p(y \mid x) \cdot p(x)}{p(y)}
+\]
+\end{tcolorbox}
+
+据此有：
+\[
+q(x_{t-1} \mid x_t, x_0) = \frac{q(x_t|x_{t-1},x_0)\cdot q(x_{t-1}|x_0)}{q(x_t|x_0)}
+\]
+
+由于 \(x_t\)  和 \(x_0\)是已知的观测值或条件，而我们要求的是关于 \(x_{t-1}\) 的分布，分母 \(q(x_t|x_0)\) 对于变量 \(x_{t-1}\)   来说就是一个常数。故将其约去，进一步有：
+\[
+q(x_{t-1} \mid x_t, x_0)  \propto q(x_t \mid x_{t-1}, x_0) \cdot q(x_{t-1} \mid x_0)
+\]
+
+因为马尔可夫性：\(
+q(x_t \mid x_{t-1}, x_0) = q(x_t \mid x_{t-1})
+\)，所以：
+\[
+q(x_{t-1} \mid x_t, x_0)  \propto q(x_t \mid x_{t-1}) \cdot q(x_{t-1} \mid x_0)
+\]
+
+即后验\(\propto\)似然\(\times\)先验，其中：
+
+似然：\( q(x_t \mid x_{t-1}) = \mathcal{N}(x_t; \sqrt{\alpha_t} x_{t-1}, \beta_t I) \)
+
+先验：\( q(x_{t-1} \mid x_0) = \mathcal{N}(x_{t-1}; \sqrt{\bar{\alpha}_{t-1}} x_0, (1 - \bar{\alpha}_{t-1}) I) \)
+
+接下来的步骤涉及联合高斯条件均值，先引入一个结论：
+
+\begin{tcolorbox}
+对于联合高斯变量 
+\[\begin{bmatrix} y \\ x \end{bmatrix} \sim \mathcal{N}\left( \begin{bmatrix} \mu_y \\ \mu_x \end{bmatrix}, \begin{bmatrix} \Sigma_{yy} & \Sigma_{yx} \\ \Sigma_{xy} & \Sigma_{xx} \end{bmatrix} \right),\]  
+其条件均值为：
+\[
+\mathbb{E}[y \mid x] = \mu_y + \Sigma_{yx} \Sigma_{xx}^{-1} (x - \mu_x)
+\]
+
+证明参见~\ref{多元高斯分布的条件均值}.
+\end{tcolorbox}
+
+回到我们的情况，注意到 \(x_{t-1}\) 和 \(x_t\) 在给定 \(x_0\) 下是联合高斯的：
+\[
+\begin{bmatrix} x_{t-1} \\ x_t \end{bmatrix} \sim \mathcal{N}\left( 
+\begin{bmatrix} \sqrt{\bar{\alpha}_{t-1}} x_0 \\ \sqrt{\bar{\alpha}_t} x_0 \end{bmatrix},
+\begin{bmatrix}
+1 - \bar{\alpha}_{t-1} & \text{Cov}(x_{t-1}, x_t) \\
+\text{Cov}(x_t, x_{t-1}) & 1 - \bar{\alpha}_t
+\end{bmatrix} 
+\right)
+\]
+
+计算协方差，注意到\(x_t = \sqrt{\alpha_t} x_{t-1} + \sqrt{\beta_t} \epsilon\)，且回顾(B) 式已有\(\text{Var}(x_{t-1}) = (1 - \bar{\alpha}_{t-1})I\)，即容易得：
+\[
+\text{Cov}(x_{t-1}, x_t) = \text{Cov}(x_{t-1},  \sqrt{\alpha_t} x_{t-1} + \sqrt{\beta_t} \epsilon) =  \sqrt{\alpha_t} \text{Var}(x_{t-1}) = \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1})
+\]
+
+故
+\[
+\mathbb{E}[x_{t-1} \mid x_t, x_0] = \sqrt{\bar{\alpha}_{t-1}} x_0 + \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1}) \cdot  (1 - \bar{\alpha}_t) ^{-1} (x_t - \sqrt{\bar{\alpha}_t} x_0)
+\]
+
+注意到，以上的均值仅与 \(x_0\) 和 \(x_t\) 有关，故写为函数形式并整理，得到：
+\[
+\tilde{\mu}(x_t, x_0) =  \left[ \sqrt{\bar{\alpha}_{t-1}} - \frac{ \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1}) \sqrt{\bar{\alpha}_t} }{1 - \bar{\alpha}_t} \right] x_0 + \frac{ \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1}) }{1 - \bar{\alpha}_t} x_t
+\]
+
+注意到\(\bar{\alpha}_t = \bar{\alpha}_{t-1} \alpha_t\)，所以 \(\sqrt{\bar{\alpha}_t} = \sqrt{\bar{\alpha}_{t-1}} \sqrt{\alpha_t}\)，进一步整理 \(x_0\) 的系数：
+
+\[
+ \sqrt{\bar{\alpha}_{t-1}} - \frac{ \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1}) \sqrt{\bar{\alpha}_t} }{1 - \bar{\alpha}_t} =
+ \sqrt{\bar{\alpha}_{t-1}} \left[ 1 - \frac{ \alpha_t (1 - \bar{\alpha}_{t-1}) }{1 - \bar{\alpha}_t} \right]
+= \sqrt{\bar{\alpha}_{t-1}} \cdot \frac{ (1 - \bar{\alpha}_t) - \alpha_t (1 - \bar{\alpha}_{t-1}) }{1 - \bar{\alpha}_t}=\frac{\sqrt{\bar{\alpha}_{t-1}} \beta_t}{1 - \bar{\alpha}_t}
+\]
+
+最终，
+\[
+\tilde{\mu}(x_t, x_0) = \frac{ \sqrt{\bar{\alpha}_{t-1}} \beta_t }{1 - \bar{\alpha}_t } x_0 + \frac{ \sqrt{\alpha_t} (1 - \bar{\alpha}_{t-1}) }{1 - \bar{\alpha}_t } x_t
+\]
+
+
+\end{proof}
+
+
+
+
+\subsection{回到实践中：从代码运行逻辑的视角看 DDPM 到底发生了什么}
+
+
+
+\section{附录}
+
+\subsection{多元高斯分布的条件均值}
+\label{多元高斯分布的条件均值}
+
+\begin{conclusion}
+对于联合高斯变量  
+\[
+\begin{bmatrix} y \\ x \end{bmatrix} \sim \mathcal{N}\left( 
+\begin{bmatrix} \mu_y \\ \mu_x \end{bmatrix},
+\begin{bmatrix}
+\Sigma_{yy} & \Sigma_{yx} \\
+\Sigma_{xy} & \Sigma_{xx}
+\end{bmatrix}
+\right),
+\]  
+其条件分布 \( p(y \mid x) \) 也是高斯分布，且  
+\[
+\mathbb{E}[y \mid x] = \mu_y + \Sigma_{yx} \Sigma_{xx}^{-1} (x - \mu_x)
+\]
+\end{conclusion}
+
+这是多元高斯分布（Multivariate Gaussian）的一个经典结果，我们先在二元的情形下考察它：
+
+
+\printbibliography%[heading=bibliography,title=参考文献]
+\end{document}
