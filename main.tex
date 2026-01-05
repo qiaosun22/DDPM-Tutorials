@@ -24,17 +24,18 @@ DDPM 是经典的高斯过程，虽然前向过程中的加噪可以\textbf{被�
 
 但是这里一个令人困惑的问题就来了，既然这样，为什么我们不直接从噪声中去掉它来得到干净的数据呢？为什么还要“舍近求远”地去把这个预测的累积 \(t\) 步的噪声 \(\epsilon_{1:t}\) 和当前数据 \(x_t\) 步之间做差值来得到仅仅向前去噪一步（相当于去掉 \(\epsilon_{t}\) ）的结果？
 
-事实上，你完全可以！DDIM 和 Flow Matching 就是这么做的（用少步甚至 1 步生成）。但目前我们讨论的是 DDPM，它选择逐步去噪的策略可以被归为历史的局限。而由 DDPM 到 DDIM 再到 Flow Matching 的演变其实恰恰反映了扩散模型发展过程中认识由浅入深的过程：
+事实上，你完全可以！DDIM 和 Flow Matching 就是这么做的（用少步甚至 1 步生成）.但目前我们讨论的是 DDPM，它选择逐步去噪的策略可以被归为历史的局限或路径依赖.而由 DDPM 到 DDIM 再到 Flow Matching 的演变其实恰恰反映了扩散模型发展过程中认识由浅入深的过程：
 
 (a) 历史原因：DDPM 基于变分推断框架
 它假设反向过程是一个马尔可夫链，每步都是高斯分布；
 为了最大化证据下界（ELBO），需要逐步建模 \(q(x_{t-1},x_t)\)；
-所以即使能一步到位，训练目标仍被设计为逐步去噪。
+所以即使能一步到位，训练目标仍被设计为逐步去噪.
 (b) 稳定性考虑（早期认知）
 在 DDPM 提出时（2020），人们认为多步去噪更稳定；
 一步去噪对模型误差敏感（若 \(\epsilon_\theta\) 有偏差， \(x_0\) 会严重失真）；
-逐步去噪可“逐步修正”误差。
-但后来 DDIM（2020）和 Flow Matching（2023）证明：只要采样策略得当，少步甚至 1 步也可以高质量生成。
+逐步去噪可“逐步修正”误差.
+但后来 DDIM（2020）和 Flow Matching（2023）证明：只要采样策略得当，少步甚至 1 步也可以高质量生成.
+关于 DDPM 对变分推断（VI）的历史路径依赖，在~\ref{DDPM 对变分推断（VI）的历史路径依赖} 中有进一步讨论.关于 DDIM和 Flow Matching 的相关理论与实践，详见~\ref{} 和 ~\ref{}.
 
 
 
@@ -187,21 +188,21 @@ q(x_{t-1} \mid x_t, x_0)  \propto q(x_t \mid x_{t-1}) \cdot q(x_{t-1} \mid x_0)
 
 \subsection{回到实践中：从代码运行逻辑的视角看 DDPM 到底发生了什么}
 
-模型预测的是 \(\epsilon\)，但这并不意味着去噪过程直接“减去 \(\epsilon\)”。实际上，去噪的每一步都由调度器（scheduler），而神经网络仅负责提供对原始噪声的估计。整个生成流程可分解为以下三个阶段：
+模型预测的是 \(\epsilon\)，但这并不意味着去噪过程直接“减去 \(\epsilon\)”.实际上，去噪的每一步都由调度器（scheduler），而神经网络仅负责提供对原始噪声的估计.整个生成流程可分解为以下三个阶段：
 
 1. 噪声预测（模型部分）  
    给定当前带噪样本 \(x_t\) 和时间步 \(t\)，神经网络输出：
    \[
    \epsilon_\theta = \texttt{model}(x_t, t)
    \]
-   这是唯一由可学习参数参与的步骤。
+   这是唯一由可学习参数参与的步骤.
 
 2. 干净图像重建（确定性计算）  
    利用预测的 \(\epsilon_\theta\)，通过重参数化公式反推对原始数据的估计：
    \[
    \hat{x}_0 = \frac{x_t - \sqrt{1 - \bar{\alpha}_t} \cdot \epsilon_\theta}{\sqrt{\bar{\alpha}_t}}
    \]
-   此步骤完全由预设的噪声调度 \(\{\bar{\alpha}_t\}\) 决定，无需学习。
+   此步骤完全由预设的噪声调度 \(\{\bar{\alpha}_t\}\) 决定，无需学习.
 
 3. 下一步状态计算（调度器核心）  
    将 \(\hat{x}_0\) 代入理论均值公式~\eqref{mu}，得到去噪后的均值：
@@ -212,19 +213,127 @@ q(x_{t-1} \mid x_t, x_0)  \propto q(x_t \mid x_{t-1}) \cdot q(x_{t-1} \mid x_0)
    \[
    x_{t-1} = \mu_\theta + \sigma_t \cdot z,\quad z \sim \mathcal{N}(0, I)
    \]
-   其中方差 \(\sigma_t\) 由调度器设定（如 \(\sigma_t = \beta_t\) 或 \(\tilde{\beta}_t\)），而随机项 \(z\) 引入探索性噪声，使采样过程保持随机性。
+   其中方差 \(\sigma_t\) 由调度器设定（如 \(\sigma_t = \beta_t\) 或 \(\tilde{\beta}_t\)），而随机项 \(z\) 引入探索性噪声，使采样过程保持随机性.
 
 \begin{tcolorbox}
     关键分工：  \\
     模型（Model）：仅预测 \(\epsilon\)；  \\
-    调度器（Scheduler）：负责所有与时间步相关的计算（\(\bar{\alpha}_t, \beta_t\)）、\(\hat{x}_0\) 重建、\(\mu_\theta\) 计算、以及是否添加随机噪声。  
+    调度器（Scheduler）：负责所有与时间步相关的计算（\(\bar{\alpha}_t, \beta_t\)）、\(\hat{x}_0\) 重建、\(\mu_\theta\) 计算、以及是否添加随机噪声.  
 \end{tcolorbox}
 
 
-这种解耦设计使得同一模型可配合不同调度策略（如 DDPM、DDIM、DPM-Solver）使用，极大提升了灵活性。例如，在 DDIM 中，调度器仅需将 \(\sigma_t\) 设为 0，即可实现确定性跳步采样，而模型本身无需任何修改。
+这种解耦设计使得同一模型可配合不同调度策略（如 DDPM、DDIM、DPM-Solver）使用，极大提升了灵活性.例如，在 DDIM 中，调度器仅需将 \(\sigma_t\) 设为 0，即可实现确定性跳步采样，而模型本身无需任何修改.
 
-因此，DDPM 的“逐步去噪”并非源于模型能力的限制，而是其默认调度策略的选择。一旦更换调度器，同一模型即可实现快速、确定性生成——这正是从 DDPM 到 DDIM 再到 Flow Matching 的演进所揭示的深层洞见：生成过程的效率瓶颈不在模型，而在采样策略。
+因此，DDPM 的“逐步去噪”并非源于模型能力的限制，而是其默认调度策略的选择.一旦更换调度器，同一模型即可实现快速、确定性生成——这正是从 DDPM 到 DDIM 再到 Flow Matching 的演进所揭示的深层洞见：生成过程的效率瓶颈不在模型，而在采样策略.
 
+\subsection{DDPM 对变分推断（VI）的历史路径依赖}
+\label{DDPM 对变分推断（VI）的历史路径依赖}
+
+\subsection{DDPM 对变分推断（VI）的历史路径依赖}
+\label{subsec:vi_path_dependence}
+
+DDPM（Ho et al., 2020）引入变分推断（VI）并非出于必要，而是受当时生成模型主流范式的约束。其核心思路是：
+\begin{itemize}
+    \item 构造前向马尔可夫链 $q(x_{1:T} \mid x_0)$；
+    \item 设计可学习的反向过程 $p_\theta(x_{0:T})$；
+    \item 通过最大化证据下界（ELBO）训练模型：
+    \[
+        \log p_\theta(x_0) \geq \mathbb{E}_q \left[ \log \frac{p_\theta(x_{0:T})}{q(x_{1:T} \mid x_0)} \right] =: \mathcal{L}_{\text{ELBO}}.
+    \]
+\end{itemize}
+为使 $\mathcal{L}_{\text{ELBO}}$ 可计算，DDPM 强制反向过程为高斯马尔可夫链，最终训练目标退化为简单的噪声回归：
+\[
+    \mathcal{L} = \|\epsilon - \epsilon_\theta(x_t, t)\|^2.
+\]
+换言之，变分推断在此仅是“绕远路的桥梁”——其引入的复杂性（完整 $T$ 步反向链、高斯假设、逐步采样）在训练目标中完全消失。
+
+DDIM（Song et al., 2020）戳破了这一幻觉：只要模型能预测全局噪声 $\epsilon$，即可在任意时间子序列上插值得到一致轨迹。它保留了相同的训练目标，却抛弃 ELBO 与马尔可夫假设，将采样重构为确定性插值。DDIM 不是“更好的 VI”，而是无需 VI 的生成建模。
+
+Flow Matching（Lipman et al., 2023）则回归第一性原理：将生成视为从噪声到数据的连续映射，通过学习速度场 $v_\theta(x,t)$ 驱动 ODE 轨迹。其前向过程为直线 $x_t = (1-t)x_0 + t\epsilon$，速度场恒为 $\epsilon - x_0$，训练目标为：
+\[
+    \mathcal{L}_{\text{FM}} = \|v_\theta(x_t, t) - (\epsilon - x_0)\|^2.
+\]
+这属于连续正规化流（CNF）框架，根植于常微分方程与最优传输，完全绕过概率建模与变分推断。
+
+从统计学视角看，这是一次范式转移：
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+方法 & 统计范式 & 第一性原理 & 需 VI？ \\
+\midrule
+DDPM & 变分推断 & 最大化 ELBO & 是 \\
+DDIM & 确定性插值 & 轨迹一致性 & 否 \\
+Flow Matching & CNF + 最优传输 & 速度场学习 & 否 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+关键洞见在于：生成高质量样本无需建模整个反向分布，只需学习一条从噪声到数据的可靠路径。
+
+因此，变分推断在扩散模型中是历史偶然，而非逻辑必然。DDIM 与 Flow Matching 之所以更高效，并非因为它们“改进了 VI”，而是因为它们彻底抛弃了 VI，转而采用更契合生成本质的数学语言——动力系统与最优传输。这正是扩散模型从“概率玩具”迈向“工业级引擎”的关键跃迁。
+
+
+\section{DDIM 对 DDPM 的批判与继承}
+
+
+\section{扩散模型与微分方程的联系}
+扩散模型与微分方程（特别是常微分方程（ODE））之间的联系，是近年来生成模型理论发展的核心突破之一。这种联系不仅为扩散模型提供了更简洁的数学表述，还催生了更高效、更稳定的训练与采样方法（如 Flow Matching）。下面从历史演进、数学本质、实践意义三个层面系统阐述。
+
+
+\subsection{历史演进：从离散链到连续动力系统}
+
+早期的去噪扩散概率模型（DDPM）\cite{ho2020denoising} 将前向加噪过程建模为一个离散时间的马尔可夫链，其反向生成过程亦被设计为逐步去噪的随机过程。该框架虽有效，但采样效率低下，且依赖于精心设计的噪声调度 $\{\beta_t\}$。
+
+随后，Song 等人 \cite{song2021scorebased} 提出基于随机微分方程（Stochastic Differential Equation, SDE）的统一视角，将前向过程视为连续时间的扩散过程：
+\[
+dx = f(x, t)\,dt + g(t)\,dw,
+\]
+其中 $w$ 为标准布朗运动（Wiener process）。模型通过学习 score 函数 $\nabla_x \log p_t(x)$ 来构造反向 SDE，从而实现从噪声到数据的生成。尽管该方法在理论上统一了多种扩散模型，但其采样过程本质上仍是随机的，且 score 函数在高噪声区域梯度不稳定，训练难度较大。
+
+近期，Lipman 等人 \cite{lipman2023flow} 提出 Flow Matching 与 Rectified Flow 框架，将扩散过程重新建模为一个确定性常微分方程（Ordinary Differential Equation, ODE）：
+\[
+\frac{dx}{dt} = v_\theta(x, t),
+\]
+其中 $v_\theta$ 为神经网络参数化的速度场（velocity field）。该方法摒弃了随机性与复杂的调度设计，仅需学习一条从噪声到数据的确定性轨迹，从而实现了训练与采样的双重简化。
+
+\subsection{数学本质：生成即轨迹学习}
+
+在 ODE 视角下，生成建模被重新诠释为动力系统中的轨迹学习问题。给定初始状态 $x(0) = x_0 \sim p_0$（真实数据）和终点 $x(1) = \epsilon \sim \mathcal{N}(0, I)$（标准高斯噪声），可定义一条前向轨迹。若采用最优传输（Optimal Transport, OT）中的直线耦合（straight coupling），则轨迹为：
+\[
+x(t) = (1 - t) x_0 + t \epsilon, \quad t \in [0, 1].
+\]
+对该轨迹求导，得到真实速度场：
+\[
+v^*(x(t), t) = \frac{dx}{dt} = \epsilon - x_0.
+\]
+Flow Matching 的训练目标即为让神经网络 $v_\theta(x, t)$ 逼近该真实速度场：
+\[
+\mathcal{L}_{\text{FM}} = \mathbb{E}_{x_0, \epsilon, t} \left[ \left\| v_\theta(x_t, t) - (\epsilon - x_0) \right\|^2 \right],
+\]
+其中 $x_t = (1 - t) x_0 + t \epsilon$。此损失函数简洁、稳定，且不依赖于任何预设的噪声调度。
+
+在生成阶段，从 $\epsilon \sim \mathcal{N}(0, I)$ 出发，求解反向 ODE：
+\[
+\frac{dx}{dt} = -v_\theta(x, t), \quad x(1) = \epsilon,
+\]
+即可得到 $x(0)$，即为生成样本。该过程完全确定性，且可通过标准 ODE 求解器（如 Euler、Heun、Dopri5）高效积分。
+
+\subsection{实践意义：高效、稳定、灵活}
+
+ODE 视角为扩散模型带来了显著的实践优势：
+
+\begin{itemize}
+    \item \textbf{训练稳定性提升}：速度场目标 $\epsilon - x_0$ 为常数向量，梯度平滑，避免了 score 函数在高噪声区域的数值不稳定性；
+    \item \textbf{采样效率大幅提高}：利用高阶 ODE 求解器，仅需 10–50 步即可生成高质量样本，远优于 DDPM 的 1000 步或 SDE 的 100+ 步；
+    \item \textbf{无需噪声调度设计}：摒弃了 $\beta_t$、$\alpha_t$ 等经验性超参数，简化了模型调优；
+    \item \textbf{完全确定性生成}：相同初始噪声 $\epsilon$ 总产生相同输出，适用于视频生成、可控生成等对一致性要求高的任务。
+\end{itemize}
+
+\subsection{宏观视角：连续时间生成建模的范式转移}
+
+微分方程为生成模型提供了一种“连续时间”的自然语言。DDPM 的离散链如同逐帧绘制的动画，SDE 如同带随机扰动的流体模拟，而 ODE 则如同精确的导航系统——从起点沿最优路径直达终点。这一转变不仅提升了效率，更将生成建模从概率近似（如变分推断）的框架中解放出来，转向以动力系统、最优控制与几何流为核心的现代数学范式。
+
+因此，扩散模型与微分方程的联系，不仅是技术细节的优化，更是生成建模思想的一次深刻跃迁：\textbf{生成的本质，是学习一个从简单分布到复杂数据分布的连续映射；而微分方程，正是描述这一映射的最自然数学工具}。
 
 
 \section{附录}
